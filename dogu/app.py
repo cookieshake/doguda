@@ -74,6 +74,8 @@ class DoguApp:
             data = payload.model_dump()
             return await self._execute_async(fn, data)
 
+        # FastAPI inspects annotations; ensure it sees the real class, not a forward ref string.
+        endpoint.__annotations__ = {"payload": payload_model}
         return endpoint
 
     def register_cli_commands(self, app: typer.Typer) -> None:

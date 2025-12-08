@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import pkgutil
 from typing import Optional
 
 from .app import DoguApp, default_app
@@ -15,6 +16,7 @@ def load_app_from_target(target: str, *, attribute: str = "app") -> DoguApp:
     """
     module_name, explicit_attr = _split_target(target, attribute)
     module = importlib.import_module(module_name)
+    _import_submodules(module)
     app = _extract_app(module, explicit_attr)
     if app:
         return app
@@ -31,6 +33,16 @@ def _split_target(target: str, default_attr: str) -> tuple[str, str]:
         module_name, attr = target.split(":", 1)
         return module_name, attr or default_attr
     return target, default_attr
+
+
+def _import_submodules(module) -> None:
+    """Eagerly import submodules when the target is a package."""
+    package_path = getattr(module, "__path__", None)
+    if package_path is None:
+        return
+    prefix = module.__name__ + "."
+    for finder, name, is_pkg in pkgutil.walk_packages(package_path, prefix):
+        importlib.import_module(name)
 
 
 def _extract_app(module, attr_name: str) -> Optional[DoguApp]:
