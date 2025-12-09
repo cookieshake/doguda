@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, get_type_hints
 
 import typer
 from fastapi import FastAPI
@@ -63,20 +63,43 @@ class DoguApp:
         api = FastAPI()
         for name, fn in self._registry.items():
             payload_model = self._build_request_model(name, fn)
+            response_model = self._resolve_response_model(fn)
 
-            api.post(f"{prefix}/{name}")(
-                self._build_endpoint(fn, payload_model)
+            api.post(f"{prefix}/{name}", response_model=response_model)(
+                self._build_endpoint(fn, payload_model, response_model)
             )
         return api
 
-    def _build_endpoint(self, fn: Callable[..., Any], payload_model: type[BaseModel]):
+    def _build_endpoint(
+        self,
+        fn: Callable[..., Any],
+        payload_model: type[BaseModel],
+        response_model: Optional[Any],
+    ):
         async def endpoint(payload: payload_model):  # type: ignore[name-defined]
             data = payload.model_dump()
             return await self._execute_async(fn, data)
 
         # FastAPI inspects annotations; ensure it sees the real class, not a forward ref string.
         endpoint.__annotations__ = {"payload": payload_model}
+        if response_model is not None:
+            endpoint.__annotations__["return"] = response_model
         return endpoint
+
+    def _resolve_response_model(self, fn: Callable[..., Any]) -> Optional[Any]:
+        """
+        Use the original function's return annotation as the FastAPI response model.
+        Allows @doguda functions to define their own response schema instead of relying
+        on a shared UResponse.
+        """
+        try:
+            annotation = get_type_hints(fn).get("return", inspect._empty)
+        except Exception:
+            annotation = inspect.signature(fn).return_annotation
+
+        if annotation in (inspect._empty, None, type(None)):
+            return None
+        return annotation
 
     def register_cli_commands(self, app: typer.Typer) -> None:
         for name, fn in self._registry.items():

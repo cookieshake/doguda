@@ -4,14 +4,24 @@ Define your commands in `dogu_app.py` so the `dogu` CLI can find them:
 
 ```python
 # dogu_app.py
-from dogu import DoguApp, UResponse, doguda
+from pydantic import BaseModel
+
+from dogu import DoguApp, doguda
+
+
+class UrlToMarkdownResponse(BaseModel):
+    markdown: str
+
 
 app = DoguApp()
 
 
 @doguda  # registers on the default Dogu app
-async def url_to_markdown(url: str) -> UResponse:
-    return UResponse(markdown=f"received: {url}")
+async def url_to_markdown(url: str) -> UrlToMarkdownResponse:
+    return UrlToMarkdownResponse(markdown=f"received: {url}")
+
+# Dogu will use your function's return annotation as the FastAPI response model,
+# so you can shape responses with your own Pydantic models.
 ```
 
 ### CLI

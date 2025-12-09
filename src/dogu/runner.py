@@ -13,6 +13,8 @@ from .loader import load_app_from_target
 DEFAULT_MODULE = os.environ.get("DOGU_MODULE", "dogu_app")
 
 cli = typer.Typer(help="Expose @doguda functions over CLI and HTTP.")
+exec_cli = typer.Typer(help="Execute registered @doguda commands.")
+cli.add_typer(exec_cli, name="exec")
 
 
 @cli.command()
@@ -36,7 +38,7 @@ def _attach_registered_commands(app_module: str) -> None:
     except Exception as exc:  # noqa: BLE001
         typer.secho(f"Failed to load Dogu app from '{app_module}': {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
-    app.register_cli_commands(cli)
+    app.register_cli_commands(exec_cli)
 
 
 def main():

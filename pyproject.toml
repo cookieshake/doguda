@@ -8,7 +8,19 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
     "typer>=0.12.0",
-    "pydantic>=2.7.0"
+    "pydantic>=2.7.0",
+    "html-to-markdown>=2.12.0",
+    "beautifulsoup4>=4.14.3",
+    "httpx>=0.28.1",
 ]
+
 [project.scripts]
 dogu = "dogu.runner:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.uv]
+package = true
