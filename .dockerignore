@@ -1,0 +1,6 @@
+.git
+.venv
+.flox
+__pycache__
+*.pyc
+.envrc

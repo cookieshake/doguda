@@ -1,0 +1,81 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: cookieshake/naraninyeo
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate date-based tag
+        id: date-tag
+        run: |
+          DATE=$(date -u +"%Y-%m-%d")
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "tag=${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "branch-tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.date-tag.outputs.tag }}
+            type=raw,value=${{ steps.date-tag.outputs.branch-tag }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  cleanup:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all containers from package without tags
+        uses: Chizkiyahu/delete-untagged-ghcr-action@v6
+        with:
+            token: ${{ secrets.GH_DELETE_PAT }}
+            repository_owner: cookieshake
+            repository: dogu
+            package_name: dogu
+            untagged_only: true
+            owner_type: user
+
+      - name: Cleanup old images from GitHub Container Registry
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          older-than: 3 months
+          keep-n-tagged: 10

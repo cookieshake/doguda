@@ -9,5 +9,5 @@ class PingResponse(BaseModel):
 
 
 @doguda
-def ping(x: int) -> PingResponse:
+def ping(x: str) -> PingResponse:
     return PingResponse(markdown=f"ping {x}")
