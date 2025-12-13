@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: cookieshake/naraninyeo
+  IMAGE_NAME: cookieshake/dogu
 
 jobs:
   build-and-push:
