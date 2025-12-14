@@ -19,17 +19,15 @@ def discover_apps(search_path: Path) -> Dict[str, DogudaApp]:
     """
     apps: Dict[str, DogudaApp] = {}
     
-    print(f"[Doguda Debug] Searching for apps in: {search_path.resolve()}")
+
     if not search_path.exists():
-        print(f"[Doguda Debug] Search path does not exist: {search_path}")
         return apps
         
     candidate_modules = _find_candidate_modules(search_path)
-    print(f"[Doguda Debug] Found candidates: {candidate_modules}")
+
     
     for mod_name in candidate_modules:
         try:
-            print(f"[Doguda Debug] Attempting to import: {mod_name}")
             # We use load_app_from_target which handles import and extraction
             # But we need to handle the case where it fails gracefully here
             module = importlib.import_module(mod_name)
@@ -40,13 +38,10 @@ def discover_apps(search_path: Path) -> Dict[str, DogudaApp]:
             # We try 'app' attribute first, then search
             app = _extract_app(module, "app")
             if app:
-                print(f"[Doguda Debug] Successfully loaded app from: {mod_name}")
                 apps[mod_name] = app
-            else:
-                print(f"[Doguda Debug] No DogudaApp found in: {mod_name}")
+
         except (ImportError, RuntimeError, Exception) as e:
             # Discovery should be loose; if a module is broken or not a doguda app, skip it.
-            print(f"[Doguda Debug] Failed to import/load {mod_name}: {e}")
             continue
             
     return apps
