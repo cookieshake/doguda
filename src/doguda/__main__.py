@@ -10,7 +10,7 @@ from .app import default_app
 from .loader import load_app_from_target
 
 
-DEFAULT_MODULE = os.environ.get("DOGU_MODULE", "dogu_app")
+DEFAULT_MODULE = os.environ.get("DOGUDA_MODULE", "doguda_app")
 
 cli = typer.Typer(help="Expose @doguda functions over CLI and HTTP.")
 exec_cli = typer.Typer(help="Execute registered @doguda commands.")
@@ -26,7 +26,7 @@ def serve(
     try:
         app = load_app_from_target(module)
     except Exception as exc:  # noqa: BLE001
-        typer.secho(f"Failed to load Dogu app from '{module}': {exc}", fg=typer.colors.RED)
+        typer.secho(f"Failed to load Doguda app from '{module}': {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
     api = app.build_fastapi()
     uvicorn.run(api, host=host, port=port)
@@ -36,7 +36,7 @@ def _attach_registered_commands(app_module: str) -> None:
     try:
         app = load_app_from_target(app_module)
     except Exception as exc:  # noqa: BLE001
-        typer.secho(f"Failed to load Dogu app from '{app_module}': {exc}", fg=typer.colors.RED)
+        typer.secho(f"Failed to load Doguda app from '{app_module}': {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
     app.register_cli_commands(exec_cli)
 

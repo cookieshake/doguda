@@ -10,14 +10,14 @@ from fastapi import FastAPI
 from pydantic import BaseModel, create_model
 
 
-class DoguApp:
+class DogudaApp:
     """Holds registered commands and builds CLI/FastAPI surfaces."""
 
     def __init__(self) -> None:
         self._registry: Dict[str, Callable[..., Any]] = {}
 
     def command(self, func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
-        """Decorator to register a function as a Dogu command."""
+        """Decorator to register a function as a Doguda command."""
 
         def decorator(fn: Callable[..., Any]):
             cmd_name = name or fn.__name__
@@ -56,10 +56,13 @@ class DoguApp:
             return asyncio.run(fn(**kwargs))
         result = fn(**kwargs)
         if inspect.isawaitable(result):
-            return asyncio.run(result)
+            async def _wrapper():
+                return await result
+
+            return asyncio.run(_wrapper())
         return result
 
-    def build_fastapi(self, prefix: str = "/v1/dogu") -> FastAPI:
+    def build_fastapi(self, prefix: str = "/v1/doguda") -> FastAPI:
         api = FastAPI()
         for name, fn in self._registry.items():
             payload_model = self._build_request_model(name, fn)
@@ -106,7 +109,7 @@ class DoguApp:
             wrapper = self._build_cli_wrapper(fn)
             wrapper.__name__ = name
             wrapper.__doc__ = fn.__doc__
-            wrapper.__signature__ = inspect.signature(fn)
+            wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
             wrapper.__annotations__ = fn.__annotations__
             app.command(name)(wrapper)
 
@@ -127,9 +130,9 @@ class DoguApp:
         typer.echo(result)
 
 
-default_app = DoguApp()
+default_app = DogudaApp()
 
 
 def doguda(func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
-    """Decorator that registers functions on the default Dogu app."""
+    """Decorator that registers functions on the default Doguda app."""
     return default_app.command(func, name=name)
