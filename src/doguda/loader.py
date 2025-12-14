@@ -5,14 +5,14 @@ import inspect
 import pkgutil
 from typing import Optional
 
-from .app import DoguApp, default_app
+from .app import DogudaApp, default_app
 
 
-def load_app_from_target(target: str, *, attribute: str = "app") -> DoguApp:
+def load_app_from_target(target: str, *, attribute: str = "app") -> DogudaApp:
     """
-    Import a module and return a DoguApp instance.
+    Import a module and return a DogudaApp instance.
     The target can be "module" or "module:attribute".
-    If no explicit DoguApp is found, fall back to the default_app that decorators register to.
+    If no explicit DogudaApp is found, fall back to the default_app that decorators register to.
     """
     module_name, explicit_attr = _split_target(target, attribute)
     module = importlib.import_module(module_name)
@@ -23,8 +23,8 @@ def load_app_from_target(target: str, *, attribute: str = "app") -> DoguApp:
     if default_app.registry:
         return default_app
     raise RuntimeError(
-        f"Could not find a DoguApp in '{target}'. "
-        "Expose a DoguApp instance (e.g. 'app = DoguApp()') or use the default @doguda decorator."
+        f"Could not find a DogudaApp in '{target}'. "
+        "Expose a DogudaApp instance (e.g. 'app = DogudaApp()') or use the default @doguda decorator."
     )
 
 
@@ -45,12 +45,12 @@ def _import_submodules(module) -> None:
         importlib.import_module(name)
 
 
-def _extract_app(module, attr_name: str) -> Optional[DoguApp]:
+def _extract_app(module, attr_name: str) -> Optional[DogudaApp]:
     candidate = getattr(module, attr_name, None)
-    if isinstance(candidate, DoguApp):
+    if isinstance(candidate, DogudaApp):
         return candidate
 
     for _, value in inspect.getmembers(module):
-        if isinstance(value, DoguApp):
+        if isinstance(value, DogudaApp):
             return value
     return None

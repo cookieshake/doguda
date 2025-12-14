@@ -23,11 +23,10 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:$PYTHONPATH"
 
 # Default environment variable
-ENV DOGU_MODULE=dogu_app
+ENV DOGUDA_MODULE=doguda_app
 
 # Expose port
 EXPOSE 8000
 
 # Run command
-CMD ["dogu", "serve"]
-
+CMD ["doguda", "serve"]
