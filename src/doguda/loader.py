@@ -5,14 +5,102 @@ import inspect
 import pkgutil
 from typing import Optional
 
-from .app import DogudaApp, default_app
+from .app import DogudaApp
+
+
+from pathlib import Path
+from typing import Dict, List
+
+
+def discover_apps(search_path: Path) -> Dict[str, DogudaApp]:
+    """
+    Scan the search_path for potential Doguda modules and load any DogudaApp instances found.
+    Returns a dictionary mapping module names to DogudaApp instances.
+    """
+    apps: Dict[str, DogudaApp] = {}
+    
+    print(f"[Doguda Debug] Searching for apps in: {search_path.resolve()}")
+    if not search_path.exists():
+        print(f"[Doguda Debug] Search path does not exist: {search_path}")
+        return apps
+        
+    candidate_modules = _find_candidate_modules(search_path)
+    print(f"[Doguda Debug] Found candidates: {candidate_modules}")
+    
+    for mod_name in candidate_modules:
+        try:
+            print(f"[Doguda Debug] Attempting to import: {mod_name}")
+            # We use load_app_from_target which handles import and extraction
+            # But we need to handle the case where it fails gracefully here
+            module = importlib.import_module(mod_name)
+            # Recursively import submodules if it's a package
+            _import_submodules(module)
+            
+            # Use the existing extraction logic
+            # We try 'app' attribute first, then search
+            app = _extract_app(module, "app")
+            if app:
+                print(f"[Doguda Debug] Successfully loaded app from: {mod_name}")
+                apps[mod_name] = app
+            else:
+                print(f"[Doguda Debug] No DogudaApp found in: {mod_name}")
+        except (ImportError, RuntimeError, Exception) as e:
+            # Discovery should be loose; if a module is broken or not a doguda app, skip it.
+            print(f"[Doguda Debug] Failed to import/load {mod_name}: {e}")
+            continue
+            
+    return apps
+
+
+def _find_candidate_modules(base_dir: Path) -> List[str]:
+    """
+    Find python modules (files) in the base_dir recursively.
+    Returns a list of dotted module names (e.g. 'my_script', 'my_pkg.submod').
+    """
+    return _recursive_find(base_dir, "")
+
+
+def _recursive_find(path: Path, prefix: str) -> List[str]:
+    candidates = []
+    
+    if not path.is_dir():
+        return candidates
+
+    for item in path.iterdir():
+        # Skip hidden files/dirs and explicitly excluded names, BUT allow __init__.py
+        if item.name.startswith((".", "_")) and item.name != "__init__.py":
+            continue
+        if item.name == "setup.py":
+            continue
+            
+        if item.is_dir():
+             # Recurse into directory
+             # Ensure directory name is a valid identifier to be part of module path
+             if not item.name.isidentifier():
+                 continue
+                 
+             new_prefix = f"{prefix}{item.name}."
+             candidates.extend(_recursive_find(item, new_prefix))
+             
+        elif item.is_file() and item.suffix == ".py":
+            if item.name == "__init__.py":
+                # It represents the package itself.
+                # Remove the trailing dot from prefix if present
+                mod_name = prefix.rstrip(".")
+                if mod_name:
+                    candidates.append(mod_name)
+            else:
+                candidates.append(f"{prefix}{item.stem}")
+            
+    # Sort for deterministic order at this level
+    candidates.sort()
+    return candidates
 
 
 def load_app_from_target(target: str, *, attribute: str = "app") -> DogudaApp:
     """
     Import a module and return a DogudaApp instance.
     The target can be "module" or "module:attribute".
-    If no explicit DogudaApp is found, fall back to the default_app that decorators register to.
     """
     module_name, explicit_attr = _split_target(target, attribute)
     module = importlib.import_module(module_name)
@@ -20,11 +108,9 @@ def load_app_from_target(target: str, *, attribute: str = "app") -> DogudaApp:
     app = _extract_app(module, explicit_attr)
     if app:
         return app
-    if default_app.registry:
-        return default_app
     raise RuntimeError(
         f"Could not find a DogudaApp in '{target}'. "
-        "Expose a DogudaApp instance (e.g. 'app = DogudaApp()') or use the default @doguda decorator."
+        "Expose a DogudaApp instance (e.g. 'app = DogudaApp()')."
     )
 
 
@@ -42,7 +128,11 @@ def _import_submodules(module) -> None:
         return
     prefix = module.__name__ + "."
     for finder, name, is_pkg in pkgutil.walk_packages(package_path, prefix):
-        importlib.import_module(name)
+        try:
+            importlib.import_module(name)
+        except Exception as e:
+             # Just warn and continue, don't crash the whole app
+            print(f"Warning: Failed to import submodule '{name}': {e}")
 
 
 def _extract_app(module, attr_name: str) -> Optional[DogudaApp]:

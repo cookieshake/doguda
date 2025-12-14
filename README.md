@@ -1,70 +1,124 @@
-## Doguda quickstart
+# Doguda
 
-Define your commands in `doguda_app.py` so the `doguda` CLI can find them:
+**Turn Python functions into CLI commands and HTTP endpoints instantly.**
+
+[![PyPI version](https://badge.fury.io/py/doguda.svg)](https://badge.fury.io/py/doguda)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Installation
+
+```bash
+pip install doguda
+```
+
+## Quick Start
+
+Create a file (e.g., `my_commands.py`):
 
 ```python
-# doguda_app.py
+from doguda import DogudaApp
+
+app = DogudaApp("MyCommands")
+
+@app.command
+def hello(name: str = "World") -> str:
+    """Say hello to someone."""
+    return f"Hello, {name}!"
+
+@app.command
+async def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+```
+
+### CLI Usage
+
+Ensure your module is in the current directory or `DOGUDA_PATH`.
+
+Run commands directly from the command line:
+
+```bash
+# Execute a command (automatically discovered)
+doguda exec hello --name "Doguda"
+# Output: Hello, Doguda!
+
+doguda exec add --a 2 --b 3
+# Output: 5
+```
+
+### List Available Commands
+
+```bash
+doguda list
+```
+
+Output:
+```
+📦 MyCommands
+  • hello(name: str)
+      Say hello to someone.
+  • add(a: int, b: int)
+      Add two numbers.
+```
+
+### HTTP Server
+
+Start a FastAPI server with your commands as endpoints:
+
+```bash
+doguda serve --host 0.0.0.0 --port 8000
+```
+
+Then call your functions via HTTP:
+
+```bash
+curl -X POST http://localhost:8000/v1/doguda/hello \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Doguda"}'
+```
+
+## Organizing Commands
+
+You can split your commands across multiple files. Valid `DogudaApp` instances with the **same name** will be automatically merged into a single logical app in the CLI.
+
+```python
+# users.py
+app = DogudaApp("Backend") # Same name
+
+# reports.py
+app = DogudaApp("Backend") # Same name
+```
+
+When running `doguda list`, these will appear unified under `📦 Backend`.
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DOGUDA_PATH` | Path to search for modules | Current directory |
+
+## Response Models
+
+Use Pydantic models for structured responses:
+
+```python
 from pydantic import BaseModel
-
-from doguda import DogudaApp, doguda
-
-
-class UrlToMarkdownResponse(BaseModel):
-    markdown: str
-
+from doguda import DogudaApp
 
 app = DogudaApp()
 
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
 
-@doguda  # registers on the default Doguda app
-async def url_to_markdown(url: str) -> UrlToMarkdownResponse:
-    return UrlToMarkdownResponse(markdown=f"received: {url}")
-
-# Doguda will use your function's return annotation as the FastAPI response model,
-# so you can shape responses with your own Pydantic models.
+@app.command
+def get_user(user_id: int) -> UserResponse:
+    """Get user by ID."""
+    return UserResponse(id=user_id, name="John", email="john@example.com")
 ```
 
-### CLI
+## License
 
-```bash
-doguda url_to_markdown --url "https://example.com"
-```
-
-Set a different module with `DOGUDA_MODULE=my_module` or `--module my_module`.
-
-### HTTP
-
-Start the FastAPI server (defaults to `doguda_app` in the current directory):
-
-```bash
-doguda serve
-```
-
-Then POST to your function at `/v1/doguda/<function_name>`:
-
-```bash
-curl -X POST http://localhost:8000/v1/doguda/url_to_markdown \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
-```
-
-### Organizing commands in a package
-
-You can also make `doguda_app` a package to auto-load submodules that register commands:
-
-```
-doguda_app/
-  __init__.py
-  urls.py       # contains @doguda functions
-  reports.py    # contains @doguda functions
-```
-
-The loader imports all submodules, so any `@doguda` usages inside `doguda_app/*` are registered without extra wiring. Keep `DOGUDA_MODULE=doguda_app` (or `--module doguda_app`) and run `doguda serve` or `doguda <command>` as usual.
-
-### Running with uv (and flox)
-
-If you're using `uv` from the flox env, activate it (or prefix with `flox run`) and keep the cache inside the repo to avoid permission issues:
-
-```bash
-UV_CACHE_DIR=$PWD/.flox/cache/uv uv run python -m doguda serve --module doguda_app
-```
+MIT License - see [LICENSE](LICENSE) for details.

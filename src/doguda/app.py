@@ -13,8 +13,9 @@ from pydantic import BaseModel, create_model
 class DogudaApp:
     """Holds registered commands and builds CLI/FastAPI surfaces."""
 
-    def __init__(self) -> None:
+    def __init__(self, name: str) -> None:
         self._registry: Dict[str, Callable[..., Any]] = {}
+        self.name = name
 
     def command(self, func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
         """Decorator to register a function as a Doguda command."""
@@ -129,10 +130,3 @@ class DogudaApp:
             return
         typer.echo(result)
 
-
-default_app = DogudaApp()
-
-
-def doguda(func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
-    """Decorator that registers functions on the default Doguda app."""
-    return default_app.command(func, name=name)
