@@ -3,19 +3,24 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from typing import Any, Callable, Dict, Optional, get_type_hints
+from typing import Any, Callable, Dict, Generic, Optional, Type, TypeVar, get_type_hints
+
+TContext = TypeVar("TContext")
+
 
 import typer
 from fastapi import FastAPI
 from pydantic import BaseModel, create_model
 
 
-class DogudaApp:
+class DogudaApp(Generic[TContext]):
     """Holds registered commands and builds CLI/FastAPI surfaces."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, context: Optional[TContext] = None) -> None:
         self._registry: Dict[str, Callable[..., Any]] = {}
         self.name = name
+        self.context = context
+
 
     def command(self, func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
         """Decorator to register a function as a Doguda command."""
@@ -36,32 +41,89 @@ class DogudaApp:
     def registry(self) -> Dict[str, Callable[..., Any]]:
         return self._registry
 
+    def set_context(self, context: TContext) -> None:
+        """Set the context instance for dependency injection."""
+        self.context = context
+
+    def _inject_context(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Inject the context into the function arguments if requested by type hint."""
+        if self.context is None:
+            return kwargs
+
+        full_kwargs = kwargs.copy()
+        sig = inspect.signature(fn)
+        try:
+            type_hints = get_type_hints(fn)
+        except Exception:
+            type_hints = {p.name: p.annotation for p in sig.parameters.values()}
+
+        for param_name, param in sig.parameters.items():
+            if param_name in full_kwargs:
+                continue
+
+            annotation = type_hints.get(param_name, Any)
+            if annotation is Any or annotation is inspect._empty:
+                continue
+
+            # Check if self.context is an instance of the annotated type.
+            # We use a try-except to handle potential issues with complex annotations.
+            try:
+                if isinstance(self.context, annotation):
+                    full_kwargs[param_name] = self.context
+            except TypeError:
+                # Some types (like Union or generics) might fail in isinstance
+                # if not handled correctly. In those cases, we skip or do more complex check.
+                pass
+
+        return full_kwargs
+
+
     def _build_request_model(self, name: str, fn: Callable[..., Any]) -> type[BaseModel]:
         sig = inspect.signature(fn)
+        try:
+            type_hints = get_type_hints(fn)
+        except Exception:
+            type_hints = {p.name: p.annotation for p in sig.parameters.values()}
+
         fields = {}
-        for param in sig.parameters.values():
-            annotation = param.annotation if param.annotation is not inspect._empty else Any
+        for param_name, param in sig.parameters.items():
+            annotation = type_hints.get(param_name, Any)
+
+            # Skip the parameter if it's the context to be injected.
+            if self.context is not None:
+                try:
+                    if isinstance(self.context, annotation):
+                        continue
+                except TypeError:
+                    pass
+
+            field_annotation = annotation if annotation is not inspect._empty else Any
             default = param.default if param.default is not inspect._empty else ...
-            fields[param.name] = (annotation, default)
+            fields[param.name] = (field_annotation, default)
         model = create_model(f"{name}_Payload", **fields)  # type: ignore[arg-type]
         return model
 
+
     async def _execute_async(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
-        result = fn(**kwargs)
+        full_kwargs = self._inject_context(fn, kwargs)
+        result = fn(**full_kwargs)
         if inspect.isawaitable(result):
             return await result
         return result
 
+
     def _execute_sync(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
+        full_kwargs = self._inject_context(fn, kwargs)
         if inspect.iscoroutinefunction(fn):
-            return asyncio.run(fn(**kwargs))
-        result = fn(**kwargs)
+            return asyncio.run(fn(**full_kwargs))
+        result = fn(**full_kwargs)
         if inspect.isawaitable(result):
             async def _wrapper():
                 return await result
 
             return asyncio.run(_wrapper())
         return result
+
 
     def build_fastapi(self, prefix: str = "/v1/doguda") -> FastAPI:
         api = FastAPI()
