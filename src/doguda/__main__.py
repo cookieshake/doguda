@@ -54,6 +54,27 @@ def _load_apps():
             # Avoid self-merge if it's the same instance
             if target_app is not app:
                 target_app.registry.update(app.registry)
+                target_app.providers.update(app.providers)
+                target_app.always_providers.extend(
+                    [p for p in app.always_providers if p not in target_app.always_providers]
+                )
+
+    # Final pass: Share all providers across all apps to enable cross-app DI
+    all_combined_providers = {}
+    all_combined_always = []
+    
+    for app in grouped_apps.values():
+        all_combined_providers.update(app.providers)
+        for p in app.always_providers:
+            if p not in all_combined_always:
+                all_combined_always.append(p)
+    
+    for app in grouped_apps.values():
+        app.providers.update(all_combined_providers)
+        # Deduplicated extend
+        for p in all_combined_always:
+            if p not in app.always_providers:
+                app.always_providers.append(p)
 
     discovered_apps = dict(sorted(grouped_apps.items()))
 
@@ -81,6 +102,13 @@ def serve(
                 # For now, warn and skip/overwrite. Let's overwrite but warn.
                 typer.secho(f"Warning: Command '{name}' from '{mod_name}' overrides existing command.", fg=typer.colors.YELLOW)
             master_app.registry[name] = fn
+            
+    # Merge all providers from all apps into master_app
+    for app in discovered_apps.values():
+        master_app.providers.update(app.providers)
+        for p in app.always_providers:
+            if p not in master_app.always_providers:
+                master_app.always_providers.append(p)
             
     api = master_app.build_fastapi()
     uvicorn.run(api, host=host, port=port)

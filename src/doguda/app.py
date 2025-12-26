@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from typing import Any, Callable, Dict, Optional, Type, get_type_hints
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Set, Type, get_type_hints
 
 
 import typer
@@ -11,12 +12,21 @@ from fastapi import FastAPI
 from pydantic import BaseModel, create_model
 
 
+@dataclass
+class ProviderInfo:
+    func: Callable[..., Any]
+    return_type: Optional[Type[Any]]
+    always: bool = False
+    priority: int = 0
+
+
 class DogudaApp:
     """Holds registered commands and builds CLI/FastAPI surfaces."""
 
     def __init__(self, name: str) -> None:
         self._registry: Dict[str, Callable[..., Any]] = {}
-        self._providers: Dict[Type[Any], Callable[..., Any]] = {}
+        self._providers: Dict[Type[Any], ProviderInfo] = {}
+        self._always_providers: List[ProviderInfo] = []
         self.name = name
 
     def command(self, func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
@@ -34,29 +44,65 @@ class DogudaApp:
     # Alias to match the requested decorator name.
     doguda = command
 
-    def provide(self, func: Callable[..., Any]):
-        """Decorator to register a function as a dependency provider based on its return type."""
-        try:
-            type_hints = get_type_hints(func)
-        except Exception:
-            sig = inspect.signature(func)
-            return_type = sig.return_annotation
-            if return_type is inspect._empty:
-                raise ValueError(f"Provider '{func.__name__}' must have a return type hint.")
-        else:
-            return_type = type_hints.get("return")
-            if return_type is None or return_type is type(None):
-                raise ValueError(f"Provider '{func.__name__}' must have a return type hint.")
+    def provide(
+        self,
+        func: Optional[Callable[..., Any]] = None,
+        *,
+        always: bool = False,
+        priority: int = 0,
+    ):
+        """Decorator to register a function as a dependency provider."""
 
-        self._providers[return_type] = func
-        return func
+        def decorator(fn: Callable[..., Any]):
+            try:
+                type_hints = get_type_hints(fn)
+            except Exception:
+                sig = inspect.signature(fn)
+                return_type = sig.return_annotation
+                if return_type is inspect._empty:
+                    return_type = None
+            else:
+                return_type = type_hints.get("return")
+                if return_type is type(None):
+                    return_type = None
+
+            if return_type is None and not always:
+                raise ValueError(
+                    f"Lazy provider '{fn.__name__}' must have a return type hint. "
+                    "Only 'always=True' providers can omit the return type hint (for side-effects)."
+                )
+
+            info = ProviderInfo(func=fn, return_type=return_type, always=always, priority=priority)
+
+            if return_type is not None:
+                self._providers[return_type] = info
+            if always:
+                self._always_providers.append(info)
+
+            return fn
+
+        if func is None:
+            return decorator
+        return decorator(func)
 
     @property
     def registry(self) -> Dict[str, Callable[..., Any]]:
         return self._registry
 
+    @property
+    def providers(self) -> Dict[Type[Any], ProviderInfo]:
+        return self._providers
+
+    @property
+    def always_providers(self) -> List[ProviderInfo]:
+        return self._always_providers
+
     async def _resolve_dependencies(
-        self, fn: Callable[..., Any], kwargs: Dict[str, Any], cache: Dict[Type[Any], Any]
+        self,
+        fn: Callable[..., Any],
+        kwargs: Dict[str, Any],
+        cache: Dict[Type[Any], Any],
+        executed_always: Set[int],
     ) -> Dict[str, Any]:
         """Recursively resolve dependencies for a function."""
         sig = inspect.signature(fn)
@@ -73,13 +119,18 @@ class DogudaApp:
             annotation = type_hints.get(param_name, Any)
             if annotation in self._providers:
                 if annotation not in cache:
-                    provider = self._providers[annotation]
+                    info = self._providers[annotation]
+                    provider = info.func
                     # Recursively resolve provider's own dependencies
-                    provider_kwargs = await self._resolve_dependencies(provider, {}, cache)
+                    provider_kwargs = await self._resolve_dependencies(
+                        provider, {}, cache, executed_always
+                    )
                     result = provider(**provider_kwargs)
                     if inspect.isawaitable(result):
                         result = await result
                     cache[annotation] = result
+                    if info.always:
+                        executed_always.add(id(info))
                 full_kwargs[param_name] = cache[annotation]
 
         return full_kwargs
@@ -107,7 +158,29 @@ class DogudaApp:
 
     async def _execute_async(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
         cache: Dict[Type[Any], Any] = {}
-        full_kwargs = await self._resolve_dependencies(fn, kwargs, cache)
+        executed_always: Set[int] = set()
+
+        # Execute 'always' providers first, sorted by priority (higher first)
+        sorted_always = sorted(self._always_providers, key=lambda x: x.priority, reverse=True)
+        for p in sorted_always:
+            # If it has a return type and is already in cache, it was executed
+            if p.return_type is not None and p.return_type in cache:
+                continue
+
+            # If it's a side-effect only provider (None), we still only want to run it once
+            if id(p) in executed_always:
+                continue
+
+            p_kwargs = await self._resolve_dependencies(p.func, {}, cache, executed_always)
+            res = p.func(**p_kwargs)
+            if inspect.isawaitable(res):
+                res = await res
+
+            executed_always.add(id(p))
+            if p.return_type is not None:
+                cache[p.return_type] = res
+
+        full_kwargs = await self._resolve_dependencies(fn, kwargs, cache, executed_always)
         result = fn(**full_kwargs)
         if inspect.isawaitable(result):
             return await result
@@ -115,9 +188,27 @@ class DogudaApp:
 
     def _execute_sync(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
         cache: Dict[Type[Any], Any] = {}
+        executed_always: Set[int] = set()
 
         async def _run():
-            full_kwargs = await self._resolve_dependencies(fn, kwargs, cache)
+            # Execute 'always' providers first, sorted by priority (higher first)
+            sorted_always = sorted(self._always_providers, key=lambda x: x.priority, reverse=True)
+            for p in sorted_always:
+                if p.return_type is not None and p.return_type in cache:
+                    continue
+                if id(p) in executed_always:
+                    continue
+
+                p_kwargs = await self._resolve_dependencies(p.func, {}, cache, executed_always)
+                res = p.func(**p_kwargs)
+                if inspect.isawaitable(res):
+                    res = await res
+
+                executed_always.add(id(p))
+                if p.return_type is not None:
+                    cache[p.return_type] = res
+
+            full_kwargs = await self._resolve_dependencies(fn, kwargs, cache, executed_always)
             result = fn(**full_kwargs)
             if inspect.isawaitable(result):
                 return await result
