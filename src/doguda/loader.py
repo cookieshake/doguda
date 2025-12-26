@@ -27,22 +27,17 @@ def discover_apps(search_path: Path) -> Dict[str, DogudaApp]:
 
     
     for mod_name in candidate_modules:
-        try:
-            # We use load_app_from_target which handles import and extraction
-            # But we need to handle the case where it fails gracefully here
-            module = importlib.import_module(mod_name)
-            # Recursively import submodules if it's a package
-            _import_submodules(module)
-            
-            # Use the existing extraction logic
-            # We try 'app' attribute first, then search
-            app = _extract_app(module, "app")
-            if app:
-                apps[mod_name] = app
-
-        except (ImportError, RuntimeError, Exception) as e:
-            # Discovery should be loose; if a module is broken or not a doguda app, skip it.
-            continue
+        # We use load_app_from_target which handles import and extraction
+        # But we need to handle the case where it fails gracefully here
+        module = importlib.import_module(mod_name)
+        # Recursively import submodules if it's a package
+        _import_submodules(module)
+        
+        # Use the existing extraction logic
+        # We try 'app' attribute first, then search
+        app = _extract_app(module, "app")
+        if app:
+            apps[mod_name] = app
             
     return apps
 
@@ -123,11 +118,7 @@ def _import_submodules(module) -> None:
         return
     prefix = module.__name__ + "."
     for finder, name, is_pkg in pkgutil.walk_packages(package_path, prefix):
-        try:
-            importlib.import_module(name)
-        except Exception as e:
-             # Just warn and continue, don't crash the whole app
-            print(f"Warning: Failed to import submodule '{name}': {e}")
+        importlib.import_module(name)
 
 
 def _extract_app(module, attr_name: str) -> Optional[DogudaApp]:

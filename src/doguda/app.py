@@ -201,9 +201,8 @@ class DogudaApp:
                         # Simple comma-separated list support
                         item_type = annotation.__args__[0] if annotation.__args__ else str
                         converted[name] = [item_type(x.strip()) for x in value.split(",")]
-                except (ValueError, TypeError):
-                    # Fallback to original value if conversion fails
-                    pass
+                except (ValueError, TypeError) as e:
+                    raise ValueError(f"Failed to convert parameter '{name}' to {annotation.__name__ if hasattr(annotation, '__name__') else annotation}: {value}") from e
         return converted
 
     async def _execute_async(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:

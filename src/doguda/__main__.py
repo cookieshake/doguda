@@ -169,15 +169,11 @@ def exec_command(
         typer.secho(f"Error: Command '{task_name}' not found in any discovered apps.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
         
-    try:
-        # We need to handle type conversion if possible.
-        # But for now, let's just pass strings and see.
-        # Ideally we'd inspect the signature and convert.
-        result = target_app.execute_sync(task_name, kwargs)
-        target_app._echo_result(result)
-    except Exception as e:
-        typer.secho(f"Error executing command '{task_name}': {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+    # We need to handle type conversion if possible.
+    # But for now, let's just pass strings and see.
+    # Ideally we'd inspect the signature and convert.
+    result = target_app.execute_sync(task_name, kwargs)
+    target_app._echo_result(result)
 
 
 def main():
