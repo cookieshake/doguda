@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from typing import Any, Callable, Dict, Generic, Optional, Type, TypeVar, get_type_hints
-
-TContext = TypeVar("TContext")
+from typing import Any, Callable, Dict, Optional, Type, get_type_hints
 
 
 import typer
@@ -13,14 +11,13 @@ from fastapi import FastAPI
 from pydantic import BaseModel, create_model
 
 
-class DogudaApp(Generic[TContext]):
+class DogudaApp:
     """Holds registered commands and builds CLI/FastAPI surfaces."""
 
-    def __init__(self, name: str, context: Optional[TContext] = None) -> None:
+    def __init__(self, name: str) -> None:
         self._registry: Dict[str, Callable[..., Any]] = {}
+        self._providers: Dict[Type[Any], Callable[..., Any]] = {}
         self.name = name
-        self.context = context
-
 
     def command(self, func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None):
         """Decorator to register a function as a Doguda command."""
@@ -37,46 +34,55 @@ class DogudaApp(Generic[TContext]):
     # Alias to match the requested decorator name.
     doguda = command
 
+    def provide(self, func: Callable[..., Any]):
+        """Decorator to register a function as a dependency provider based on its return type."""
+        try:
+            type_hints = get_type_hints(func)
+        except Exception:
+            sig = inspect.signature(func)
+            return_type = sig.return_annotation
+            if return_type is inspect._empty:
+                raise ValueError(f"Provider '{func.__name__}' must have a return type hint.")
+        else:
+            return_type = type_hints.get("return")
+            if return_type is None or return_type is type(None):
+                raise ValueError(f"Provider '{func.__name__}' must have a return type hint.")
+
+        self._providers[return_type] = func
+        return func
+
     @property
     def registry(self) -> Dict[str, Callable[..., Any]]:
         return self._registry
 
-    def set_context(self, context: TContext) -> None:
-        """Set the context instance for dependency injection."""
-        self.context = context
-
-    def _inject_context(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """Inject the context into the function arguments if requested by type hint."""
-        if self.context is None:
-            return kwargs
-
-        full_kwargs = kwargs.copy()
+    async def _resolve_dependencies(
+        self, fn: Callable[..., Any], kwargs: Dict[str, Any], cache: Dict[Type[Any], Any]
+    ) -> Dict[str, Any]:
+        """Recursively resolve dependencies for a function."""
         sig = inspect.signature(fn)
         try:
             type_hints = get_type_hints(fn)
         except Exception:
             type_hints = {p.name: p.annotation for p in sig.parameters.values()}
 
+        full_kwargs = kwargs.copy()
         for param_name, param in sig.parameters.items():
             if param_name in full_kwargs:
                 continue
 
             annotation = type_hints.get(param_name, Any)
-            if annotation is Any or annotation is inspect._empty:
-                continue
-
-            # Check if self.context is an instance of the annotated type.
-            # We use a try-except to handle potential issues with complex annotations.
-            try:
-                if isinstance(self.context, annotation):
-                    full_kwargs[param_name] = self.context
-            except TypeError:
-                # Some types (like Union or generics) might fail in isinstance
-                # if not handled correctly. In those cases, we skip or do more complex check.
-                pass
+            if annotation in self._providers:
+                if annotation not in cache:
+                    provider = self._providers[annotation]
+                    # Recursively resolve provider's own dependencies
+                    provider_kwargs = await self._resolve_dependencies(provider, {}, cache)
+                    result = provider(**provider_kwargs)
+                    if inspect.isawaitable(result):
+                        result = await result
+                    cache[annotation] = result
+                full_kwargs[param_name] = cache[annotation]
 
         return full_kwargs
-
 
     def _build_request_model(self, name: str, fn: Callable[..., Any]) -> type[BaseModel]:
         sig = inspect.signature(fn)
@@ -89,13 +95,9 @@ class DogudaApp(Generic[TContext]):
         for param_name, param in sig.parameters.items():
             annotation = type_hints.get(param_name, Any)
 
-            # Skip the parameter if it's the context to be injected.
-            if self.context is not None:
-                try:
-                    if isinstance(self.context, annotation):
-                        continue
-                except TypeError:
-                    pass
+            # Skip the parameter if it's provided by a registered provider.
+            if annotation in self._providers:
+                continue
 
             field_annotation = annotation if annotation is not inspect._empty else Any
             default = param.default if param.default is not inspect._empty else ...
@@ -103,27 +105,25 @@ class DogudaApp(Generic[TContext]):
         model = create_model(f"{name}_Payload", **fields)  # type: ignore[arg-type]
         return model
 
-
     async def _execute_async(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
-        full_kwargs = self._inject_context(fn, kwargs)
+        cache: Dict[Type[Any], Any] = {}
+        full_kwargs = await self._resolve_dependencies(fn, kwargs, cache)
         result = fn(**full_kwargs)
         if inspect.isawaitable(result):
             return await result
         return result
 
-
     def _execute_sync(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
-        full_kwargs = self._inject_context(fn, kwargs)
-        if inspect.iscoroutinefunction(fn):
-            return asyncio.run(fn(**full_kwargs))
-        result = fn(**full_kwargs)
-        if inspect.isawaitable(result):
-            async def _wrapper():
+        cache: Dict[Type[Any], Any] = {}
+
+        async def _run():
+            full_kwargs = await self._resolve_dependencies(fn, kwargs, cache)
+            result = fn(**full_kwargs)
+            if inspect.isawaitable(result):
                 return await result
+            return result
 
-            return asyncio.run(_wrapper())
-        return result
-
+        return asyncio.run(_run())
 
     def build_fastapi(self, prefix: str = "/v1/doguda") -> FastAPI:
         api = FastAPI()
@@ -155,8 +155,6 @@ class DogudaApp(Generic[TContext]):
     def _resolve_response_model(self, fn: Callable[..., Any]) -> Optional[Any]:
         """
         Use the original function's return annotation as the FastAPI response model.
-        Allows @doguda functions to define their own response schema instead of relying
-        on a shared UResponse.
         """
         try:
             annotation = get_type_hints(fn).get("return", inspect._empty)
@@ -172,8 +170,25 @@ class DogudaApp(Generic[TContext]):
             wrapper = self._build_cli_wrapper(fn)
             wrapper.__name__ = name
             wrapper.__doc__ = fn.__doc__
-            wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
-            wrapper.__annotations__ = fn.__annotations__
+
+            # Filter signature to exclude dependencies provided by @provide
+            sig = inspect.signature(fn)
+            try:
+                type_hints = get_type_hints(fn)
+            except Exception:
+                type_hints = {p.name: p.annotation for p in sig.parameters.values()}
+
+            new_params = []
+            for param in sig.parameters.values():
+                annotation = type_hints.get(param.name, Any)
+                if annotation not in self._providers:
+                    new_params.append(param)
+
+            wrapper.__signature__ = sig.replace(parameters=new_params) # type: ignore[attr-defined]
+            # Annotations help Typer with types, filter them too.
+            wrapper.__annotations__ = {
+                k: v for k, v in type_hints.items() if k != "return" and v not in self._providers
+            }
             app.command(name)(wrapper)
 
     def _build_cli_wrapper(self, fn: Callable[..., Any]):
@@ -191,4 +206,5 @@ class DogudaApp(Generic[TContext]):
             typer.echo(json.dumps(result, indent=2, default=str))
             return
         typer.echo(result)
+
 
