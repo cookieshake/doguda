@@ -156,9 +156,62 @@ class DogudaApp:
         model = create_model(f"{name}_Payload", **fields)  # type: ignore[arg-type]
         return model
 
+    async def execute_async(self, name: str, kwargs: Dict[str, Any]) -> Any:
+        """Execute a registered command by name asynchronously."""
+        if name not in self._registry:
+            raise KeyError(f"Command '{name}' not found in app '{self.name}'")
+        fn = self._registry[name]
+        return await self._execute_async(fn, kwargs)
+
+    def execute_sync(self, name: str, kwargs: Dict[str, Any]) -> Any:
+        """Execute a registered command by name synchronously."""
+        if name not in self._registry:
+            raise KeyError(f"Command '{name}' not found in app '{self.name}'")
+        fn = self._registry[name]
+        return self._execute_sync(fn, kwargs)
+
+    def _convert_params(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert string arguments to the types expected by the function signature."""
+        sig = inspect.signature(fn)
+        try:
+            type_hints = get_type_hints(fn)
+        except Exception:
+            type_hints = {p.name: p.annotation for p in sig.parameters.values()}
+
+        converted = kwargs.copy()
+        for name, value in converted.items():
+            if name not in sig.parameters:
+                continue
+            
+            param = sig.parameters[name]
+            annotation = type_hints.get(name, param.annotation)
+            
+            if annotation in (inspect._empty, Any):
+                continue
+            
+            if isinstance(value, str):
+                try:
+                    if annotation is int:
+                        converted[name] = int(value)
+                    elif annotation is float:
+                        converted[name] = float(value)
+                    elif annotation is bool:
+                        converted[name] = value.lower() in ("true", "1", "yes", "on")
+                    elif hasattr(annotation, "__origin__") and annotation.__origin__ is list:
+                        # Simple comma-separated list support
+                        item_type = annotation.__args__[0] if annotation.__args__ else str
+                        converted[name] = [item_type(x.strip()) for x in value.split(",")]
+                except (ValueError, TypeError):
+                    # Fallback to original value if conversion fails
+                    pass
+        return converted
+
     async def _execute_async(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
         cache: Dict[Type[Any], Any] = {}
         executed_always: Set[int] = set()
+
+        # Type conversion for input kwargs (especially for CLI strings)
+        kwargs = self._convert_params(fn, kwargs)
 
         # Execute 'always' providers first, sorted by priority (higher first)
         sorted_always = sorted(self._always_providers, key=lambda x: x.priority, reverse=True)
@@ -187,6 +240,9 @@ class DogudaApp:
         return result
 
     def _execute_sync(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
+        # Type conversion for input kwargs (especially for CLI strings)
+        kwargs = self._convert_params(fn, kwargs)
+        
         cache: Dict[Type[Any], Any] = {}
         executed_always: Set[int] = set()
 
